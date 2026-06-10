@@ -9,3 +9,11 @@
 {"update": 9, "step": 18432, "mean_return": -81.20260800000001, "mean_score": 0.0, "mean_lines": 0.0, "pg_loss": -0.004756335241836496, "vf_loss": 141.9696786403656, "entropy": 2.041553810238838}
 {"update": 10, "step": 20480, "mean_return": -88.879696, "mean_score": 0.0, "mean_lines": 0.0, "pg_loss": -0.002358587269554846, "vf_loss": 182.4105567932129, "entropy": 2.042894810438156}
 {"update": 11, "step": 22528, "mean_return": -74.9065888, "mean_score": 0.0, "mean_lines": 0.0, "pg_loss": -0.0004054632590850815, "vf_loss": 123.50880670547485, "entropy": 2.050724469125271}
+{"update": 12, "step": 24576, "mean_return": -84.88154879999999, "mean_score": 0.0, "mean_lines": 0.0, "pg_loss": -0.0034955097071360797, "vf_loss": 134.0435390472412, "entropy": 2.0640286058187485}
+{"update": 13, "step": 26624, "mean_return": -72.7319968, "mean_score": 0.0, "mean_lines": 0.0, "pg_loss": -0.0008189317741198465, "vf_loss": 117.94083404541016, "entropy": 2.072362072765827}
+{"update": 14, "step": 28672, "mean_return": -92.07282239999999, "mean_score": 0.0, "mean_lines": 0.0, "pg_loss": -0.0032991546322591603, "vf_loss": 158.09799218177795, "entropy": 2.06240351498127}
+{"update": 15, "step": 30720, "mean_return": -72.2602912, "mean_score": 0.0, "mean_lines": 0.0, "pg_loss": -0.0031950904376572, "vf_loss": 81.89491868019104, "entropy": 2.053323872387409}
+{"update": 16, "step": 32768, "mean_return": -76.58804160000001, "mean_score": 0.0, "mean_lines": 0.0, "pg_loss": -0.0044991009490331635, "vf_loss": 80.5330958366394, "entropy": 2.0342425778508186}
+{"update": 17, "step": 34816, "mean_return": -76.3922336, "mean_score": 0.0, "mean_lines": 0.0, "pg_loss": -0.005904452613322064, "vf_loss": 64.78584516048431, "entropy": 2.025100566446781}
+{"update": 18, "step": 36864, "mean_return": -101.68359360000001, "mean_score": 0.0, "mean_lines": 0.0, "pg_loss": -0.00018980863387696445, "vf_loss": 135.8517189025879, "entropy": 2.0202906280755997}
+{"update": 19, "step": 38912, "mean_return": -91.22809279999998, "mean_score": 0.0, "mean_lines": 0.0, "pg_loss": -0.003135556762572378, "vf_loss": 102.32097721099854, "entropy": 1.998039472848177}
