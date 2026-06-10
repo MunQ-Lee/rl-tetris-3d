@@ -5,3 +5,5 @@ checkpoints/
 .venv/
 venv/
 .DS_Store
+*.log
+nohup.out
