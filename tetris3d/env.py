@@ -13,7 +13,7 @@ import numpy as np
 from . import pieces as P
 
 # Board dimensions.
-W, D, H = 5, 5, 12
+W, D, H = 6, 6, 12
 
 # Discrete action set.
 ACTIONS = [
