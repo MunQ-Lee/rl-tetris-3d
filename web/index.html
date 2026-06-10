@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>3D Tetris — PPO Agent</title>
+<style>
+  * { margin: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: #0d1117; color: #e6edf3;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow: hidden; }
+  #canvas { display: block; width: 100vw; height: 100vh; }
+  #hud { position: fixed; top: 16px; left: 16px; padding: 14px 18px;
+    background: rgba(22,27,34,.82); border: 1px solid #30363d; border-radius: 10px;
+    line-height: 1.7; font-size: 14px; min-width: 220px; }
+  #hud h1 { font-size: 15px; margin-bottom: 8px; color: #58a6ff; letter-spacing: .5px; }
+  #hud .row { display: flex; justify-content: space-between; gap: 18px; }
+  #hud .k { color: #8b949e; }
+  #hud .v { font-weight: 700; }
+  #status { margin-top: 8px; font-size: 11px; color: #8b949e; word-break: break-all; }
+  #hint { position: fixed; bottom: 14px; left: 16px; font-size: 11px; color: #6e7681; }
+  #over { color: #f85149; font-weight: 700; }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="hud">
+  <h1>3D TETRIS · PPO</h1>
+  <div class="row"><span class="k">Score</span><span class="v" id="score">0</span></div>
+  <div class="row"><span class="k">Layers</span><span class="v" id="layers">0</span></div>
+  <div class="row"><span class="k">Pieces</span><span class="v" id="pieces">0</span></div>
+  <div class="row"><span class="k">Episode</span><span class="v" id="episode">0</span></div>
+  <div class="row"><span class="k">Next</span><span class="v" id="next">-</span></div>
+  <div id="status">connecting…</div>
+  <div id="over"></div>
+</div>
+<div id="hint">드래그: 회전 · 휠: 줌 · 우클릭드래그: 이동</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+}}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const W = 5, D = 5, H = 12;  // updated from server dims
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d1117);
+
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 200);
+camera.position.set(11, 13, 14);
+
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('canvas'), antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.target.set(0, H / 2, 0);
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+const dir = new THREE.DirectionalLight(0xffffff, 0.9);
+dir.position.set(8, 20, 12);
+scene.add(dir);
+
+// Center the board around origin; tetris (x,y,z) -> three (x, z_up, y).
+function toWorld(x, y, z) {
+  return new THREE.Vector3(x - (W - 1) / 2, z + 0.5, y - (D - 1) / 2);
+}
+
+// Board cage + floor grid.
+const cage = new THREE.LineSegments(
+  new THREE.EdgesGeometry(new THREE.BoxGeometry(W, H, D)),
+  new THREE.LineBasicMaterial({ color: 0x30363d })
+);
+cage.position.set(0, H / 2, 0);
+scene.add(cage);
+
+const grid = new THREE.GridHelper(Math.max(W, D), Math.max(W, D), 0x484f58, 0x21262d);
+grid.position.y = 0;
+scene.add(grid);
+
+const cubeGeo = new THREE.BoxGeometry(0.92, 0.92, 0.92);
+const edgeGeo = new THREE.EdgesGeometry(cubeGeo);
+let cubeGroup = new THREE.Group();
+scene.add(cubeGroup);
+
+function makeCube(pos, colorHex, isPiece) {
+  const mat = new THREE.MeshLambertMaterial({
+    color: colorHex,
+    emissive: isPiece ? colorHex : 0x000000,
+    emissiveIntensity: isPiece ? 0.45 : 0.0,
+    transparent: isPiece,
+    opacity: isPiece ? 0.95 : 1.0,
+  });
+  const mesh = new THREE.Mesh(cubeGeo, mat);
+  mesh.position.copy(pos);
+  const wire = new THREE.LineSegments(edgeGeo,
+    new THREE.LineBasicMaterial({ color: isPiece ? 0xffffff : 0x0d1117, transparent: true, opacity: 0.35 }));
+  mesh.add(wire);
+  return mesh;
+}
+
+function rebuild(state) {
+  scene.remove(cubeGroup);
+  cubeGroup.traverse(o => { if (o.geometry && o !== cubeGroup) {} });
+  cubeGroup = new THREE.Group();
+  const colors = state.colors || ['#888'];
+  for (const [x, y, z, t] of state.cells) {
+    cubeGroup.add(makeCube(toWorld(x, y, z), colors[t] || '#888', false));
+  }
+  const pc = colors[state.piece_type] || '#ffffff';
+  for (const [x, y, z] of state.piece) {
+    cubeGroup.add(makeCube(toWorld(x, y, z), pc, true));
+  }
+  scene.add(cubeGroup);
+}
+
+const $ = id => document.getElementById(id);
+let lastDims = null;
+
+async function poll() {
+  try {
+    const r = await fetch('/api/state', { cache: 'no-store' });
+    const s = await r.json();
+    if (s.dims && (!lastDims || lastDims.join() !== s.dims.join())) {
+      lastDims = s.dims;
+    }
+    rebuild(s);
+    $('score').textContent = s.score ?? 0;
+    $('layers').textContent = s.cleared_layers ?? 0;
+    $('pieces').textContent = s.pieces_placed ?? 0;
+    $('episode').textContent = s.episode ?? 0;
+    $('next').textContent = (s.next_type ?? -1) >= 0 ? '#' + s.next_type : '-';
+    $('status').textContent = s.ckpt_status || '';
+    $('over').textContent = s.done ? 'GAME OVER' : '';
+  } catch (e) {
+    $('status').textContent = 'disconnected: ' + e;
+  }
+}
+setInterval(poll, 100);
+poll();
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+(function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+})();
+</script>
+</body>
+</html>
