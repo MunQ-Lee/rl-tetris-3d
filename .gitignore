@@ -7,3 +7,5 @@ venv/
 .DS_Store
 *.log
 nohup.out
+archive/
+checkpoints/.push_state.json

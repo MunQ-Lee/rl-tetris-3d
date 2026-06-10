@@ -32,6 +32,7 @@ GAMEOVER_PENALTY = -50.0
 W_HEIGHT = -0.4    # penalize aggregate column height
 W_HOLES = -1.2     # penalize covered empty cells
 W_BUMPY = -0.2     # penalize uneven surface
+W_FILL = 8.0       # reward filling layers toward completion (fill_fraction**3 per layer)
 
 
 class Piece:
@@ -133,9 +134,17 @@ class Tetris3DEnv:
         bump = int(np.abs(np.diff(hmap, axis=0)).sum() + np.abs(np.diff(hmap, axis=1)).sum())
         return agg_height, holes, bump
 
+    def _fill_bonus(self):
+        # Reward layers that are close to complete (cubic emphasizes near-full
+        # layers), steering the agent toward actually clearing layers.
+        area = W * D
+        frac = self.board.sum(axis=(0, 1)) / area  # fill fraction per z-layer
+        return float((frac ** 3).sum())
+
     def _potential(self):
         h, holes, bump = self._features()
-        return W_HEIGHT * h + W_HOLES * holes + W_BUMPY * bump
+        return (W_HEIGHT * h + W_HOLES * holes + W_BUMPY * bump
+                + W_FILL * self._fill_bonus())
 
     # ---- step ----------------------------------------------------------
     def step(self, action):

@@ -39,7 +39,7 @@ def main():
     obs = env.reset()
     ep_return, ep_len, ep_score = 0.0, 0, 0
     ep_returns, ep_scores, ep_lines = [], [], []
-    best_score = -1e9
+    best_perf = -1e9
     log_path = os.path.join(CKPT_DIR, "train_log.jsonl")
 
     global_step = 0
@@ -103,14 +103,17 @@ def main():
                 "mean_lines": mean_lines, **stats,
             }) + "\n")
 
+        # Combined performance: clears and score dominate once they appear,
+        # while mean_return guides progress early on (when score is still 0).
+        perf = mean_lines * 100.0 + mean_score + mean_ret
         if update % args.save_every == 0:
             agent.save(os.path.join(CKPT_DIR, "latest.pt"))
-        if mean_score > best_score and ep_scores:
-            best_score = mean_score
+        if perf > best_perf and ep_returns:
+            best_perf = perf
             agent.save(os.path.join(CKPT_DIR, "best.pt"))
 
     agent.save(os.path.join(CKPT_DIR, "latest.pt"))
-    print("done. best mean score:", best_score)
+    print("done. best perf:", best_perf)
 
 
 if __name__ == "__main__":
