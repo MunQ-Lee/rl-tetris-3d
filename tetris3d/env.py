@@ -27,12 +27,16 @@ NUM_ACTIONS = len(ACTIONS)
 LAYER_SCORE = {0: 0, 1: 100, 2: 300, 3: 600, 4: 1000}
 
 # Reward-shaping weights (potential-based, on top of the game score).
-ALIVE_REWARD = 1.0
+# Tuned to push the 5x5 agent toward actually completing & clearing layers:
+# survival alone is barely rewarded, while near-complete layers are strongly
+# attractive and holes (which block clears) are punished hard.
+ALIVE_REWARD = 0.2
 GAMEOVER_PENALTY = -50.0
-W_HEIGHT = -0.4    # penalize aggregate column height
-W_HOLES = -1.2     # penalize covered empty cells
-W_BUMPY = -0.2     # penalize uneven surface
-W_FILL = 8.0       # reward filling layers toward completion (fill_fraction**3 per layer)
+W_HEIGHT = -0.25   # penalize aggregate column height (mild: allow building up)
+W_HOLES = -2.5     # penalize covered empty cells (they prevent clears)
+W_BUMPY = -0.3     # penalize uneven surface
+W_FILL = 30.0      # reward filling layers toward completion (steep: fill_fraction**4)
+FILL_POW = 4
 
 
 class Piece:
@@ -139,7 +143,7 @@ class Tetris3DEnv:
         # layers), steering the agent toward actually clearing layers.
         area = W * D
         frac = self.board.sum(axis=(0, 1)) / area  # fill fraction per z-layer
-        return float((frac ** 3).sum())
+        return float((frac ** FILL_POW).sum())
 
     def _potential(self):
         h, holes, bump = self._features()
