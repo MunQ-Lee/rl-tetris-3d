@@ -28,6 +28,8 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--no-shaping", action="store_true")
+    ap.add_argument("--fresh", action="store_true",
+                    help="ignore any existing checkpoint and start from scratch")
     args = ap.parse_args()
 
     os.makedirs(CKPT_DIR, exist_ok=True)
@@ -35,6 +37,18 @@ def main():
 
     env = Tetris3DEnv(seed=args.seed, shaping=not args.no_shaping)
     agent = PPO(Tetris3DEnv.obs_dim(), NUM_ACTIONS, lr=args.lr)
+
+    # Auto-resume from the latest checkpoint so a restart (e.g. after a crash)
+    # continues training instead of starting over. Falls back to a fresh net if
+    # the checkpoint is missing or its shape no longer matches (e.g. board size
+    # changed). Pass --fresh to force a clean start.
+    latest = os.path.join(CKPT_DIR, "latest.pt")
+    if not args.fresh and os.path.exists(latest):
+        try:
+            agent.load(latest)
+            print(f"resumed from {latest}", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"could not resume from {latest} ({e}); starting fresh", flush=True)
 
     obs = env.reset()
     ep_return, ep_len, ep_score = 0.0, 0, 0
