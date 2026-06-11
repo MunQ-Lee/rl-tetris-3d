@@ -2,7 +2,7 @@
 
 Run periodically (e.g. every 10 minutes). It reads checkpoints/train_log.jsonl,
 computes the best performance reached so far, and if it beat the last pushed
-performance it force-adds checkpoints/best.pt + the training log and pushes.
+performance it force-adds the agents' checkpoints + the training log and pushes.
 
 Performance metric (matches train.py):
     perf = mean_lines * 100 + mean_score + mean_return
@@ -15,9 +15,11 @@ import sys
 
 CKPT_DIR = "checkpoints"
 LOG = os.path.join(CKPT_DIR, "train_log.jsonl")
-BEST = os.path.join(CKPT_DIR, "best.pt")
+# Competitive run keeps two agents' checkpoints; push whichever exist.
+CKPTS = [os.path.join(CKPT_DIR, f) for f in
+         ("best_p0.pt", "best_p1.pt", "latest_p0.pt", "latest_p1.pt")]
 STATE = os.path.join(CKPT_DIR, ".push_state.json")
-MARGIN = 1.0  # minimum perf gain required to push (noise guard)
+MARGIN = 0.2  # minimum perf gain required to push (noise guard; greedy-lines scale)
 
 
 def sh(args):
@@ -45,7 +47,8 @@ def perf_of(r):
 
 def main():
     rows = load_rows()
-    if not rows or not os.path.exists(BEST):
+    existing = [c for c in CKPTS if os.path.exists(c)]
+    if not rows or not existing:
         print("nothing to push yet (no log or checkpoint)")
         return 0
 
@@ -73,7 +76,7 @@ def main():
         return 0
 
     # Stage best checkpoint + training log (both are normally gitignored).
-    sh(["git", "add", "-f", BEST, LOG])
+    sh(["git", "add", "-f", *existing, LOG])
     msg = (f"Training improved: perf {cur['perf']:.1f}, "
            f"lines {cur['lines']:.2f}, score {cur['score']:.1f} "
            f"@ update {cur['update']} (step {cur['step']})")
