@@ -28,6 +28,36 @@ def make_agent(lr):
     return AfterstatePPO(Tetris3DEnv.state_dim(), Tetris3DEnv.placement_dim(), lr=lr)
 
 
+def greedy_eval(agents, n_matches=4, max_rounds=250):
+    """Play greedy (argmax) versus matches -- the agents' TRUE skill, vs the
+    noisy sampled-policy training metric. Returns (avg layers/agent, avg
+    garbage attacks/match)."""
+    env = VersusEnv(prefill_p=0.0)
+    layers = 0
+    attacks = 0
+    for _ in range(n_matches):
+        env.reset()
+        for _ in range(max_rounds):
+            chosen = []
+            ok = True
+            for p in (0, 1):
+                pls, feats = env.legal(p)
+                if not pls:
+                    env.envs[p].done = True
+                    ok = False
+                    break
+                idx, _, _ = agents[p].act(env.state(p), feats, greedy=True)
+                chosen.append(pls[idx])
+            if not ok:
+                break
+            _, _, done, _ = env.step(chosen)
+            if done:
+                break
+        layers += env.envs[0].cleared_layers + env.envs[1].cleared_layers
+        attacks += sum(env.attacks)
+    return layers / (2 * n_matches), attacks / n_matches
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--updates", type=int, default=5000)
@@ -35,8 +65,10 @@ def main():
     ap.add_argument("--save-every", type=int, default=3)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--lr", type=float, default=3e-4)
-    ap.add_argument("--curriculum-updates", type=int, default=150,
+    ap.add_argument("--curriculum-updates", type=int, default=200,
                     help="updates over which the prefill curriculum decays to 0")
+    ap.add_argument("--eval-every", type=int, default=5,
+                    help="run a greedy evaluation (true skill) every N updates")
     ap.add_argument("--fresh", action="store_true")
     args = ap.parse_args()
 
@@ -63,6 +95,8 @@ def main():
     ep_stats = []          # per finished game: (winner, cleared0, cleared1, rounds)
     ep_return = [0.0, 0.0]
     best_perf = -1e18
+    greedy_lines = 0.0     # true (argmax) skill, refreshed every eval-every updates
+    greedy_attacks = 0.0
     log_path = os.path.join(CKPT_DIR, "train_log.jsonl")
     t0 = time.time()
     global_round = 0
@@ -135,28 +169,37 @@ def main():
             winrate0 = wins0 / len(recent)
         else:
             mean_lines = mean_rounds = winrate0 = 0.0
-        mean_score = mean_lines * 100.0   # rough game-score proxy for the push metric
         ent = (ustats[0]["entropy"] + ustats[1]["entropy"]) / 2
         fps = int(global_round / (time.time() - t0))
 
-        print(f"upd {update:4d} | round {global_round:7d} | rps {fps:4d} | "
-              f"games {len(ep_stats):4d} | lines {mean_lines:5.2f} | rounds {mean_rounds:5.1f} | "
-              f"win0 {winrate0:.2f} | ent {ent:.3f}", flush=True)
+        # Greedy evaluation = the agents' TRUE skill (the sampled `mean_lines`
+        # above is depressed by exploration). This is what we log as the push /
+        # best-checkpoint metric so improvements are real.
+        if update % args.eval_every == 0 or update == 1:
+            greedy_lines, greedy_attacks = greedy_eval(agents)
 
-        mean_return = mean_lines  # keep push metric tied to real performance (clears)
+        print(f"upd {update:4d} | round {global_round:7d} | rps {fps:4d} | "
+              f"games {len(ep_stats):4d} | sampled_lines {mean_lines:4.2f} | "
+              f"greedy_lines {greedy_lines:5.1f} | greedy_atk {greedy_attacks:4.1f} | "
+              f"rounds {mean_rounds:5.1f} | ent {ent:.3f}", flush=True)
+
+        # push_if_improved reads mean_lines/mean_score/mean_return -> tie them to
+        # greedy skill so it pushes on genuine improvement.
         with open(log_path, "a") as f:
             f.write(json.dumps({
                 "update": update, "round": global_round, "prefill": round(prefill, 3),
-                "mean_lines": mean_lines, "mean_score": mean_score, "mean_return": mean_return,
-                "mean_rounds": mean_rounds, "winrate0": winrate0,
-                "entropy": ent, "vf_loss": (ustats[0]["vf_loss"] + ustats[1]["vf_loss"]) / 2,
+                "mean_lines": greedy_lines, "mean_score": greedy_lines * 100.0,
+                "mean_return": greedy_attacks, "greedy_attacks": greedy_attacks,
+                "sampled_lines": mean_lines, "mean_rounds": mean_rounds,
+                "winrate0": winrate0, "entropy": ent,
+                "vf_loss": (ustats[0]["vf_loss"] + ustats[1]["vf_loss"]) / 2,
             }) + "\n")
 
-        perf = mean_lines
+        perf = greedy_lines + greedy_attacks
         if update % args.save_every == 0:
             for p in (0, 1):
                 agents[p].save(os.path.join(CKPT_DIR, f"latest_p{p}.pt"))
-        if perf > best_perf and recent:
+        if perf > best_perf:
             best_perf = perf
             for p in (0, 1):
                 agents[p].save(os.path.join(CKPT_DIR, f"best_p{p}.pt"))

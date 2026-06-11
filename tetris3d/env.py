@@ -23,8 +23,8 @@ from . import pieces as P
 # Board dimensions (override with TETRIS_W / TETRIS_D / TETRIS_H env vars).
 # Smaller cross-sections clear far more easily, which matters a lot for the
 # competitive mode (attacks only happen when layers actually clear).
-W = int(os.environ.get("TETRIS_W", 4))
-D = int(os.environ.get("TETRIS_D", 4))
+W = int(os.environ.get("TETRIS_W", 5))
+D = int(os.environ.get("TETRIS_D", 5))
 H = int(os.environ.get("TETRIS_H", 10))
 
 # Human game score for clearing k layers at once (reported in the GUI/metrics).
