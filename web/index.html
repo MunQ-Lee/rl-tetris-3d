@@ -3,37 +3,47 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>3D Tetris — PPO Agent</title>
+<title>3D Tetris — PPO vs PPO</title>
 <style>
   * { margin: 0; box-sizing: border-box; }
   html, body { height: 100%; background: #0d1117; color: #e6edf3;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow: hidden; }
   #canvas { display: block; width: 100vw; height: 100vh; }
-  #hud { position: fixed; top: 16px; left: 16px; padding: 14px 18px;
-    background: rgba(22,27,34,.82); border: 1px solid #30363d; border-radius: 10px;
-    line-height: 1.7; font-size: 14px; min-width: 220px; }
-  #hud h1 { font-size: 15px; margin-bottom: 8px; color: #58a6ff; letter-spacing: .5px; }
-  #hud .row { display: flex; justify-content: space-between; gap: 18px; }
-  #hud .k { color: #8b949e; }
-  #hud .v { font-weight: 700; }
-  #status { margin-top: 8px; font-size: 11px; color: #8b949e; word-break: break-all; }
-  #hint { position: fixed; bottom: 14px; left: 16px; font-size: 11px; color: #6e7681; }
-  #over { color: #f85149; font-weight: 700; }
+  .hud { position: fixed; top: 16px; padding: 12px 16px; background: rgba(22,27,34,.82);
+    border: 1px solid #30363d; border-radius: 10px; line-height: 1.6; font-size: 13px; min-width: 180px; }
+  #hud0 { left: 16px; border-left: 3px solid #58a6ff; }
+  #hud1 { right: 16px; border-left: 3px solid #f85149; }
+  .hud h1 { font-size: 14px; margin-bottom: 6px; letter-spacing: .5px; }
+  #hud0 h1 { color: #58a6ff; } #hud1 h1 { color: #f85149; }
+  .row { display: flex; justify-content: space-between; gap: 16px; }
+  .k { color: #8b949e; } .v { font-weight: 700; }
+  #banner { position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+    text-align: center; font-size: 13px; color: #8b949e; }
+  #banner .big { font-size: 18px; font-weight: 800; color: #e6edf3; }
+  #win { font-weight: 800; font-size: 16px; margin-top: 4px; min-height: 20px; }
+  #hint { position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%); font-size: 11px; color: #6e7681; }
 </style>
 </head>
 <body>
 <canvas id="canvas"></canvas>
-<div id="hud">
-  <h1>3D TETRIS · PPO</h1>
-  <div class="row"><span class="k">Score</span><span class="v" id="score">0</span></div>
-  <div class="row"><span class="k">Layers</span><span class="v" id="layers">0</span></div>
-  <div class="row"><span class="k">Pieces</span><span class="v" id="pieces">0</span></div>
-  <div class="row"><span class="k">Episode</span><span class="v" id="episode">0</span></div>
-  <div class="row"><span class="k">Next</span><span class="v" id="next">-</span></div>
-  <div id="status">connecting…</div>
-  <div id="over"></div>
+<div class="hud" id="hud0">
+  <h1>PLAYER 0</h1>
+  <div class="row"><span class="k">Score</span><span class="v" id="s0">0</span></div>
+  <div class="row"><span class="k">Layers</span><span class="v" id="l0">0</span></div>
+  <div class="row"><span class="k">Attack</span><span class="v" id="a0">0</span></div>
 </div>
-<div id="hint">드래그: 회전 · 휠: 줌 · 우클릭드래그: 이동</div>
+<div class="hud" id="hud1">
+  <h1>PLAYER 1</h1>
+  <div class="row"><span class="k">Score</span><span class="v" id="s1">0</span></div>
+  <div class="row"><span class="k">Layers</span><span class="v" id="l1">0</span></div>
+  <div class="row"><span class="k">Attack</span><span class="v" id="a1">0</span></div>
+</div>
+<div id="banner">
+  <div class="big">3D TETRIS · PPO vs PPO</div>
+  <div>round <span id="round">0</span> · <span id="status">connecting…</span></div>
+  <div id="win"></div>
+</div>
+<div id="hint">드래그: 회전 · 휠: 줌 · 한쪽이 줄을 지우면 상대 보드가 차오릅니다 (가비지 공격)</div>
 
 <script type="importmap">
 { "imports": {
@@ -46,116 +56,94 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const W = 5, D = 5, H = 12;  // updated from server dims
+let W = 6, D = 6, H = 12;
+const GAP = 4;  // gap between the two boards
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0d1117);
-
-const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 200);
-camera.position.set(11, 13, 14);
-
-const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('canvas'), antialias: true });
-renderer.setPixelRatio(window.devicePixelRatio);
-renderer.setSize(window.innerWidth, window.innerHeight);
-
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 300);
+camera.position.set(0, 16, 26);
+const renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+renderer.setSize(innerWidth, innerHeight);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.target.set(0, H / 2, 0);
 
-scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-const dir = new THREE.DirectionalLight(0xffffff, 0.9);
-dir.position.set(8, 20, 12);
-scene.add(dir);
-
-// Center the board around origin; tetris (x,y,z) -> three (x, z_up, y).
-function toWorld(x, y, z) {
-  return new THREE.Vector3(x - (W - 1) / 2, z + 0.5, y - (D - 1) / 2);
-}
-
-// Board cage + floor grid.
-const cage = new THREE.LineSegments(
-  new THREE.EdgesGeometry(new THREE.BoxGeometry(W, H, D)),
-  new THREE.LineBasicMaterial({ color: 0x30363d })
-);
-cage.position.set(0, H / 2, 0);
-scene.add(cage);
-
-const grid = new THREE.GridHelper(Math.max(W, D), Math.max(W, D), 0x484f58, 0x21262d);
-grid.position.y = 0;
-scene.add(grid);
+scene.add(new THREE.AmbientLight(0xffffff, 0.65));
+const dir = new THREE.DirectionalLight(0xffffff, 0.9); dir.position.set(8, 24, 14); scene.add(dir);
 
 const cubeGeo = new THREE.BoxGeometry(0.92, 0.92, 0.92);
 const edgeGeo = new THREE.EdgesGeometry(cubeGeo);
-let cubeGroup = new THREE.Group();
-scene.add(cubeGroup);
 
-function makeCube(pos, colorHex, isPiece) {
-  const mat = new THREE.MeshLambertMaterial({
-    color: colorHex,
-    emissive: isPiece ? colorHex : 0x000000,
-    emissiveIntensity: isPiece ? 0.45 : 0.0,
-    transparent: isPiece,
-    opacity: isPiece ? 0.95 : 1.0,
-  });
-  const mesh = new THREE.Mesh(cubeGeo, mat);
-  mesh.position.copy(pos);
-  const wire = new THREE.LineSegments(edgeGeo,
-    new THREE.LineBasicMaterial({ color: isPiece ? 0xffffff : 0x0d1117, transparent: true, opacity: 0.35 }));
-  mesh.add(wire);
-  return mesh;
+// origin X for each board so the two sit side by side
+function originX(b) { return b === 0 ? -(W + GAP) / 2 : (W + GAP) / 2; }
+function toWorld(b, x, y, z) {
+  return new THREE.Vector3(originX(b) + x - (W - 1) / 2, z + 0.5, y - (D - 1) / 2);
 }
 
-function rebuild(state) {
-  scene.remove(cubeGroup);
-  cubeGroup.traverse(o => { if (o.geometry && o !== cubeGroup) {} });
-  cubeGroup = new THREE.Group();
-  const colors = state.colors || ['#888'];
-  for (const [x, y, z, t] of state.cells) {
-    cubeGroup.add(makeCube(toWorld(x, y, z), colors[t] || '#888', false));
+const scaffold = new THREE.Group(); scene.add(scaffold);
+function buildScaffold() {
+  scaffold.clear();
+  for (const b of [0, 1]) {
+    const cage = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(W, H, D)),
+      new THREE.LineBasicMaterial({ color: b === 0 ? 0x1f3a5f : 0x5f1f24 }));
+    cage.position.set(originX(b), H / 2, 0); scaffold.add(cage);
+    const grid = new THREE.GridHelper(Math.max(W, D), Math.max(W, D), 0x484f58, 0x21262d);
+    grid.position.set(originX(b), 0, 0); scaffold.add(grid);
   }
-  const pc = colors[state.piece_type] || '#ffffff';
-  for (const [x, y, z] of state.piece) {
-    cubeGroup.add(makeCube(toWorld(x, y, z), pc, true));
-  }
-  scene.add(cubeGroup);
+}
+buildScaffold();
+
+let cubes = new THREE.Group(); scene.add(cubes);
+function makeCube(pos, color, isPiece) {
+  const mat = new THREE.MeshLambertMaterial({
+    color, emissive: isPiece ? color : 0x000000, emissiveIntensity: isPiece ? 0.5 : 0.0,
+    transparent: isPiece, opacity: isPiece ? 0.95 : 1.0 });
+  const m = new THREE.Mesh(cubeGeo, mat); m.position.copy(pos);
+  m.add(new THREE.LineSegments(edgeGeo, new THREE.LineBasicMaterial({
+    color: isPiece ? 0xffffff : 0x0d1117, transparent: true, opacity: 0.3 })));
+  return m;
+}
+
+function rebuild(s) {
+  const ng = new THREE.Group();
+  s.boards.forEach((bd, b) => {
+    const colors = bd.colors || ['#888'];
+    for (const [x, y, z, t] of bd.cells) ng.add(makeCube(toWorld(b, x, y, z), colors[t] || '#888', false));
+    const pc = (bd.colors || [])[bd.piece_type] || '#ffffff';
+    for (const [x, y, z] of bd.piece) ng.add(makeCube(toWorld(b, x, y, z), pc, true));
+  });
+  scene.remove(cubes); cubes = ng; scene.add(cubes);
 }
 
 const $ = id => document.getElementById(id);
-let lastDims = null;
-
 async function poll() {
   try {
-    const r = await fetch('/api/state', { cache: 'no-store' });
-    const s = await r.json();
-    if (s.dims && (!lastDims || lastDims.join() !== s.dims.join())) {
-      lastDims = s.dims;
+    const s = await (await fetch('/api/state', { cache: 'no-store' })).json();
+    if (!s.boards || !s.boards.length) { $('status').textContent = 'waiting for match…'; return; }
+    const d = s.boards[0].dims; if (d) {
+      if (d[0] !== W || d[1] !== D || d[2] !== H) { [W, D, H] = d; buildScaffold(); controls.target.set(0, H / 2, 0); }
     }
     rebuild(s);
-    $('score').textContent = s.score ?? 0;
-    $('layers').textContent = s.cleared_layers ?? 0;
-    $('pieces').textContent = s.pieces_placed ?? 0;
-    $('episode').textContent = s.episode ?? 0;
-    $('next').textContent = (s.next_type ?? -1) >= 0 ? '#' + s.next_type : '-';
-    $('status').textContent = s.ckpt_status || '';
-    $('over').textContent = s.done ? 'GAME OVER' : '';
-  } catch (e) {
-    $('status').textContent = 'disconnected: ' + e;
-  }
+    $('s0').textContent = s.boards[0].score; $('l0').textContent = s.boards[0].cleared_layers;
+    $('s1').textContent = s.boards[1].score; $('l1').textContent = s.boards[1].cleared_layers;
+    $('a0').textContent = (s.attacks || [0, 0])[0]; $('a1').textContent = (s.attacks || [0, 0])[1];
+    $('round').textContent = s.rounds || 0;
+    $('status').textContent = s.status || '';
+    $('win').textContent = s.done ? (s.winner === -1 ? '⚖ DRAW' : (s.winner === 0 ? '◀ PLAYER 0 WINS' : 'PLAYER 1 WINS ▶')) : '';
+    $('win').style.color = s.winner === 0 ? '#58a6ff' : (s.winner === 1 ? '#f85149' : '#e6edf3');
+  } catch (e) { $('status').textContent = 'disconnected'; }
 }
-setInterval(poll, 100);
+setInterval(poll, 70);
 poll();
 
-window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
 });
-
-(function animate() {
-  requestAnimationFrame(animate);
-  controls.update();
-  renderer.render(scene, camera);
-})();
+(function loop() { requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); })();
 </script>
 </body>
 </html>

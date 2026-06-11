@@ -9,3 +9,5 @@ venv/
 nohup.out
 archive/
 checkpoints/.push_state.json
+_val_*.py
+checkpoints_train.log

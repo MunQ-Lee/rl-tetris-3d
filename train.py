@@ -1,10 +1,14 @@
-"""Train a PPO agent to play 3D Tetris.
+"""Competitive training: two PPO agents learn 3D Tetris by playing each other.
+
+Each agent uses the afterstate (placement) policy. They play versus matches:
+clearing layers sends garbage that raises the opponent's board; topping out
+loses. Both agents train on their own experience and co-adapt.
 
 Usage:
-    python train.py --updates 500 --rollout 2048
+    python train.py --updates 5000 --rollout 1024
 
-Checkpoints are written to checkpoints/latest.pt (every save interval) and
-checkpoints/best.pt (best mean episode score). The GUI server reads latest.pt.
+Checkpoints: checkpoints/latest_p0.pt, latest_p1.pt (for the GUI) and
+best_p0.pt / best_p1.pt (best combined performance). Resumes automatically.
 """
 import argparse
 import json
@@ -13,121 +17,153 @@ import time
 
 import numpy as np
 
-from tetris3d.env import Tetris3DEnv, NUM_ACTIONS
-from tetris3d.ppo import PPO
+from tetris3d.env import Tetris3DEnv
+from tetris3d.versus import VersusEnv
+from tetris3d.afterstate_agent import AfterstatePPO
 
 CKPT_DIR = "checkpoints"
 
 
+def make_agent(lr):
+    return AfterstatePPO(Tetris3DEnv.state_dim(), Tetris3DEnv.placement_dim(), lr=lr)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--updates", type=int, default=1000)
-    ap.add_argument("--rollout", type=int, default=2048, help="steps per update")
-    ap.add_argument("--max-ep-steps", type=int, default=3000)
-    ap.add_argument("--save-every", type=int, default=5)
+    ap.add_argument("--updates", type=int, default=5000)
+    ap.add_argument("--rollout", type=int, default=1024, help="rounds per update")
+    ap.add_argument("--save-every", type=int, default=3)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--lr", type=float, default=3e-4)
-    ap.add_argument("--no-shaping", action="store_true")
-    ap.add_argument("--fresh", action="store_true",
-                    help="ignore any existing checkpoint and start from scratch")
+    ap.add_argument("--curriculum-updates", type=int, default=150,
+                    help="updates over which the prefill curriculum decays to 0")
+    ap.add_argument("--fresh", action="store_true")
     args = ap.parse_args()
 
     os.makedirs(CKPT_DIR, exist_ok=True)
     np.random.seed(args.seed)
 
-    env = Tetris3DEnv(seed=args.seed, shaping=not args.no_shaping)
-    agent = PPO(Tetris3DEnv.obs_dim(), NUM_ACTIONS, lr=args.lr)
+    agents = [make_agent(args.lr), make_agent(args.lr)]
+    for p in (0, 1):
+        ckpt = os.path.join(CKPT_DIR, f"latest_p{p}.pt")
+        if not args.fresh and os.path.exists(ckpt):
+            try:
+                agents[p].load(ckpt)
+                print(f"resumed agent {p} from {ckpt}", flush=True)
+            except Exception as e:  # noqa: BLE001
+                print(f"could not resume agent {p} ({e}); fresh", flush=True)
 
-    # Auto-resume from the latest checkpoint so a restart (e.g. after a crash)
-    # continues training instead of starting over. Falls back to a fresh net if
-    # the checkpoint is missing or its shape no longer matches (e.g. board size
-    # changed). Pass --fresh to force a clean start.
-    latest = os.path.join(CKPT_DIR, "latest.pt")
-    if not args.fresh and os.path.exists(latest):
-        try:
-            agent.load(latest)
-            print(f"resumed from {latest}", flush=True)
-        except Exception as e:  # noqa: BLE001
-            print(f"could not resume from {latest} ({e}); starting fresh", flush=True)
+    env = VersusEnv(seed=args.seed)
+    states = env.reset()
 
-    obs = env.reset()
-    ep_return, ep_len, ep_score = 0.0, 0, 0
-    ep_returns, ep_scores, ep_lines = [], [], []
-    best_perf = -1e9
+    # per-agent rollout buffers
+    def empty_buf():
+        return {k: [] for k in ["state", "cand", "act", "logp", "rew", "val", "done"]}
+
+    ep_stats = []          # per finished game: (winner, cleared0, cleared1, rounds)
+    ep_return = [0.0, 0.0]
+    best_perf = -1e18
     log_path = os.path.join(CKPT_DIR, "train_log.jsonl")
-
-    global_step = 0
     t0 = time.time()
+    global_round = 0
+
     for update in range(1, args.updates + 1):
-        buf = {k: [] for k in ["obs", "actions", "logp", "rewards", "values", "dones"]}
+        prefill = max(0.0, 0.7 * (1.0 - update / max(1, args.curriculum_updates)))
+        env.set_prefill(prefill)
+        bufs = [empty_buf(), empty_buf()]
+
         for _ in range(args.rollout):
-            action, logp, value = agent.act(obs)
-            next_obs, reward, done, info = env.step(action)
-            buf["obs"].append(obs)
-            buf["actions"].append(action)
-            buf["logp"].append(logp)
-            buf["rewards"].append(reward)
-            buf["values"].append(value)
-            buf["dones"].append(float(done))
-            obs = next_obs
-            ep_return += reward
-            ep_len += 1
-            ep_score = info["score"]
-            global_step += 1
+            chosen = [None, None]
+            stepdata = [None, None]
+            for p in (0, 1):
+                cands, feats = env.legal(p)
+                if not cands:                      # safety: treat as forced loss
+                    env.envs[p].done = True
+                    # pick a dummy; step will end the game
+                    chosen[p] = None
+                    stepdata[p] = None
+                    continue
+                idx, logp, val = agents[p].act(states[p], feats)
+                chosen[p] = cands[idx]
+                stepdata[p] = (states[p], feats, idx, logp, val)
 
-            if done or ep_len >= args.max_ep_steps:
-                ep_returns.append(ep_return)
-                ep_scores.append(ep_score)
-                ep_lines.append(info["cleared_layers"])
-                ep_return, ep_len = 0.0, 0
-                obs = env.reset()
+            if chosen[0] is None or chosen[1] is None:
+                # one side had no move: end & reset, skip storing this partial round
+                states = env.reset()
+                continue
 
-        # Bootstrap value for the final state.
-        _, _, last_value = agent.act(obs)
-        rewards = np.array(buf["rewards"], dtype=np.float32)
-        values = np.array(buf["values"], dtype=np.float32)
-        dones = np.array(buf["dones"], dtype=np.float32)
-        adv, returns = agent.compute_gae(rewards, values, dones, last_value)
+            next_states, rewards, done, info = env.step(chosen)
+            for p in (0, 1):
+                st, feats, idx, logp, val = stepdata[p]
+                b = bufs[p]
+                b["state"].append(st); b["cand"].append(feats); b["act"].append(idx)
+                b["logp"].append(logp); b["val"].append(val)
+                b["rew"].append(rewards[p]); b["done"].append(float(done))
+                ep_return[p] += rewards[p]
+            states = next_states
+            global_round += 1
 
-        batch = {
-            "obs": np.array(buf["obs"], dtype=np.float32),
-            "actions": np.array(buf["actions"], dtype=np.int64),
-            "logp": np.array(buf["logp"], dtype=np.float32),
-            "adv": adv,
-            "returns": returns,
-        }
-        stats = agent.update(batch)
+            if done:
+                ep_stats.append((info["winner"], info["cleared"][0], info["cleared"][1], info["rounds"]))
+                ep_return = [0.0, 0.0]
+                states = env.reset()
 
-        n_ep = max(len(ep_returns), 1)
-        mean_ret = float(np.mean(ep_returns[-20:])) if ep_returns else 0.0
-        mean_score = float(np.mean(ep_scores[-20:])) if ep_scores else 0.0
-        mean_lines = float(np.mean(ep_lines[-20:])) if ep_lines else 0.0
-        fps = int(global_step / (time.time() - t0))
+        # PPO update for each agent
+        ustats = []
+        for p in (0, 1):
+            b = bufs[p]
+            if not b["rew"]:
+                ustats.append({"pg_loss": 0, "vf_loss": 0, "entropy": 0})
+                continue
+            last_val = agents[p].value_of(states[p])
+            rew = np.array(b["rew"], np.float32)
+            val = np.array(b["val"], np.float32)
+            dn = np.array(b["done"], np.float32)
+            adv, ret = agents[p].compute_gae(rew, val, dn, last_val)
+            ustats.append(agents[p].update(
+                b["state"], b["cand"], np.array(b["act"], np.int64),
+                np.array(b["logp"], np.float32), adv, ret))
 
-        print(f"upd {update:4d} | step {global_step:8d} | fps {fps:5d} | "
-              f"ep {len(ep_returns):4d} | ret {mean_ret:8.1f} | "
-              f"score {mean_score:7.1f} | lines {mean_lines:5.2f} | "
-              f"ent {stats['entropy']:.3f} | vf {stats['vf_loss']:.2f}",
-              flush=True)
+        # metrics over recent games
+        recent = ep_stats[-50:]
+        if recent:
+            cleared = [(c0 + c1) / 2.0 for _, c0, c1, _ in recent]
+            mean_lines = float(np.mean(cleared))
+            mean_rounds = float(np.mean([r for *_, r in recent]))
+            wins0 = sum(1 for w, *_ in recent if w == 0)
+            wins1 = sum(1 for w, *_ in recent if w == 1)
+            winrate0 = wins0 / len(recent)
+        else:
+            mean_lines = mean_rounds = winrate0 = 0.0
+        mean_score = mean_lines * 100.0   # rough game-score proxy for the push metric
+        ent = (ustats[0]["entropy"] + ustats[1]["entropy"]) / 2
+        fps = int(global_round / (time.time() - t0))
 
+        print(f"upd {update:4d} | round {global_round:7d} | rps {fps:4d} | "
+              f"games {len(ep_stats):4d} | lines {mean_lines:5.2f} | rounds {mean_rounds:5.1f} | "
+              f"win0 {winrate0:.2f} | ent {ent:.3f}", flush=True)
+
+        mean_return = mean_lines  # keep push metric tied to real performance (clears)
         with open(log_path, "a") as f:
             f.write(json.dumps({
-                "update": update, "step": global_step,
-                "mean_return": mean_ret, "mean_score": mean_score,
-                "mean_lines": mean_lines, **stats,
+                "update": update, "round": global_round, "prefill": round(prefill, 3),
+                "mean_lines": mean_lines, "mean_score": mean_score, "mean_return": mean_return,
+                "mean_rounds": mean_rounds, "winrate0": winrate0,
+                "entropy": ent, "vf_loss": (ustats[0]["vf_loss"] + ustats[1]["vf_loss"]) / 2,
             }) + "\n")
 
-        # Combined performance: clears and score dominate once they appear,
-        # while mean_return guides progress early on (when score is still 0).
-        perf = mean_lines * 100.0 + mean_score + mean_ret
+        perf = mean_lines
         if update % args.save_every == 0:
-            agent.save(os.path.join(CKPT_DIR, "latest.pt"))
-        if perf > best_perf and ep_returns:
+            for p in (0, 1):
+                agents[p].save(os.path.join(CKPT_DIR, f"latest_p{p}.pt"))
+        if perf > best_perf and recent:
             best_perf = perf
-            agent.save(os.path.join(CKPT_DIR, "best.pt"))
+            for p in (0, 1):
+                agents[p].save(os.path.join(CKPT_DIR, f"best_p{p}.pt"))
 
-    agent.save(os.path.join(CKPT_DIR, "latest.pt"))
-    print("done. best perf:", best_perf)
+    for p in (0, 1):
+        agents[p].save(os.path.join(CKPT_DIR, f"latest_p{p}.pt"))
+    print("done. best mean lines:", best_perf)
 
 
 if __name__ == "__main__":

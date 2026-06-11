@@ -1,3 +1,3 @@
-from .env import Tetris3DEnv, ACTIONS, NUM_ACTIONS
+from .env import Tetris3DEnv, W, D, H, PLACEMENT_FEAT_DIM, STATE_FEAT_DIM
 
-__all__ = ["Tetris3DEnv", "ACTIONS", "NUM_ACTIONS"]
+__all__ = ["Tetris3DEnv", "W", "D", "H", "PLACEMENT_FEAT_DIM", "STATE_FEAT_DIM"]
