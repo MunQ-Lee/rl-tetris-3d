@@ -99,6 +99,10 @@ class Tetris3DEnv:
         self.rng = np.random.default_rng(seed)
         self.reset()
 
+    def _draw_piece(self):
+        """Sample a piece type with the size-weighted distribution."""
+        return int(self.rng.choice(P.NUM_PIECE_TYPES, p=P.PIECE_PROBS))
+
     # ---- lifecycle -----------------------------------------------------
     def reset(self, prefill_p=0.0):
         self.board = np.zeros((W, D, H), dtype=np.int8)
@@ -110,8 +114,8 @@ class Tetris3DEnv:
         self.done = False
         if prefill_p > 0 and self.rng.random() < prefill_p:
             self._prefill()
-        self.cur_type = int(self.rng.integers(P.NUM_PIECE_TYPES))
-        self.next_type = int(self.rng.integers(P.NUM_PIECE_TYPES))
+        self.cur_type = self._draw_piece()
+        self.next_type = self._draw_piece()
         self.last_pos = None     # corner of the most recent placement (for GUI)
         self.last_cells = None
         if not self.enumerate_placements()[0]:
@@ -174,10 +178,12 @@ class Tetris3DEnv:
         if n == 0:
             return [], np.zeros((0, PLACEMENT_FEAT_DIM), np.float32)
 
-        # Batched afterstate occupancy: (n, W, D, H).
+        # Batched afterstate occupancy: (n, W, D, H). All candidates are for the
+        # same current piece, so they share the same cell count (3, 4 or 5).
         occ = np.broadcast_to(self.board > 0, (n, W, D, H)).copy()
-        world = np.stack(cand_cells)                # (n, 4, 3)
-        ci = np.repeat(np.arange(n), 4)
+        world = np.stack(cand_cells)                # (n, ncells, 3)
+        ncells = world.shape[1]
+        ci = np.repeat(np.arange(n), ncells)
         flat = world.reshape(-1, 3)
         occ[ci, flat[:, 0], flat[:, 1], flat[:, 2]] = True
 
@@ -284,7 +290,7 @@ class Tetris3DEnv:
 
         # Advance to the next piece.
         self.cur_type = self.next_type
-        self.next_type = int(self.rng.integers(P.NUM_PIECE_TYPES))
+        self.next_type = self._draw_piece()
         if not self.enumerate_placements()[0]:
             self.done = True
             reward += GAMEOVER_PENALTY
