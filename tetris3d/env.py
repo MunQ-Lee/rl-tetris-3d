@@ -23,8 +23,8 @@ from . import pieces as P
 # Board dimensions (override with TETRIS_W / TETRIS_D / TETRIS_H env vars).
 # Smaller cross-sections clear far more easily, which matters a lot for the
 # competitive mode (attacks only happen when layers actually clear).
-W = int(os.environ.get("TETRIS_W", 5))
-D = int(os.environ.get("TETRIS_D", 5))
+W = int(os.environ.get("TETRIS_W", 4))
+D = int(os.environ.get("TETRIS_D", 4))
 H = int(os.environ.get("TETRIS_H", 10))
 
 # Human game score for clearing k layers at once (reported in the GUI/metrics).
@@ -244,13 +244,22 @@ class Tetris3DEnv:
             self.board, self.board_color = nb, nc
         return n
 
+    def _lowest_incomplete_fill(self):
+        """Cell count of the lowest z-layer that is not yet full."""
+        counts = (self.board > 0).sum(axis=(0, 1))
+        area = W * D
+        for z in range(H):
+            if counts[z] < area:
+                return int(counts[z])
+        return area
+
     # ---- apply a placement --------------------------------------------
     def place(self, placement, placements_cache=None):
         if self.done:
             return 0.0, True, self._info()
 
         before_h = board_quality(self.board)
-        maxlayer_before = int((self.board > 0).sum(axis=(0, 1)).max())
+        lowfill_before = self._lowest_incomplete_fill()
         self.last_cells = placement.cells
         self.last_pos = placement.pos.copy()
         lines = self._apply_with_color(placement.cells, placement.pos, self.cur_type)
@@ -260,13 +269,16 @@ class Tetris3DEnv:
         self.score += LAYER_SCORE[min(lines, 4)]
 
         after_h = board_quality(self.board)
-        maxlayer_after = int((self.board > 0).sum(axis=(0, 1)).max())
+        lowfill_after = self._lowest_incomplete_fill()
         phi_before = (HEALTH_W_HEIGHT * before_h[0] + HEALTH_W_HOLES * before_h[1]
                       + HEALTH_W_BUMPY * before_h[2])
         phi_after = (HEALTH_W_HEIGHT * after_h[0] + HEALTH_W_HOLES * after_h[1]
                      + HEALTH_W_BUMPY * after_h[2])
         health_delta = float(np.clip(phi_after - phi_before, -HEALTH_CLIP, HEALTH_CLIP))
-        fill_progress = FILL_PROGRESS_W * max(0, maxlayer_after - maxlayer_before)
+        # Reward filling the LOWEST incomplete layer (drives the next clear
+        # directly; stacking upper layers without filling the bottom earns
+        # nothing here). One-way, so it does not telescope on clears.
+        fill_progress = FILL_PROGRESS_W * max(0, lowfill_after - lowfill_before)
 
         reward = CLEAR_REWARD[min(lines, 4)] + PLACE_REWARD + health_delta + fill_progress
 
